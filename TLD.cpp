@@ -19,10 +19,10 @@ using namespace std;
 ///全局变量 ==================================================================
 // 常量      -----------------------------------------------------------------
 // 分类器中蕨的数量
-#define TOTAL_FERNS 10
+#define TOTAL_FERNS 13
 
 // 每颗蕨的节点数
-#define TOTAL_NODES 5
+#define TOTAL_NODES 7
 
 // 特征小块与整幅图像的最小的高度宽度百分比
 #define MIN_FEATURE_SCALE 0.1f
@@ -36,7 +36,7 @@ using namespace std;
 // 当探测出的小块中有一个信任度高于跟踪器跟踪的小块,
 // 它必须也高于这个值，然后才能用于重新初始化跟踪器
 // 注意: MIN_REINIT_CONF 应当 <= MIN_LEARNING_CONF
-#define MIN_REINIT_CONF 0.8
+#define MIN_REINIT_CONF 0.7
 
 // 上一帧跟踪器跟踪出的小块的最小的信任度,用于下一帧中继续跟踪
 #define MIN_TRACKING_CONF 0.15
@@ -144,18 +144,23 @@ void trainNegative(IntegralImage *frame, double *tbb) {
     for (float scale = minScale; scale <= maxScale; scale += scaleInc) {
         int minX = 0;
         int currentWidth = (int)(scale * initBBWidth);
-        int maxX = frameWidth - currentWidth;
-        int iterationsX = 20;
-        int incX = (maxX - minX) / (iterationsX - 1);
+        if(currentWidth>=initBBWidth)currentWidth=initBBWidth-1;
+        int maxX = initBBWidth - currentWidth;
+        float iterationsX = 20.0;
+        int incX = (int)floor((float)(maxX - minX) / (iterationsX - 1.0));
+        if(incX==0)incX=1;
         
+	            // Same for y
+            int minY = 0;
+            int currentHeight = (int)(scale * (float)initBBHeight);
+            if(currentHeight>=initBBHeight)currentHeight=initBBHeight-1;
+            int maxY = initBBHeight - currentHeight;
+            float iterationsY = 20.0;
+            int incY = (int)floor((float)(maxY - minY) / (iterationsY - 1));
+            if(incY==0)incY=1;
         // Loop through all bounding-box top-left x-positions
         for (int x = minX; x <= maxX; x += incX) {
-            // Same for y
-            int minY = 0;
-            int currentHeight = (int)(scale * initBBHeight);
-            int maxY = frameHeight - currentHeight;
-            int iterationsY = 20;
-            int incY = (maxX - minX) / (iterationsY - 1);
+
             
             // Loop through all bounding-box top-left x-positions
             for (int y = minY; y <= maxY; y += incY) {

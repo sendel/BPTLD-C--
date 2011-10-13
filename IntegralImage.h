@@ -5,8 +5,8 @@
 
 #pragma once
 #include <algorithm>
-#include "cv.h"
-#include "highgui.h"
+#include <opencv/cv.h>
+#include <opencv/highgui.h>
 
 
 /*  An integral image, or summed area table, allows fast computation of 
@@ -33,7 +33,7 @@ class IntegralImage {
     // Private ===============================================================
     private:
     // 2-dimensional array containing values of the integral image
-    int **data;
+
     
     // Dimensions of the image
     int width, height;
@@ -42,11 +42,12 @@ class IntegralImage {
     // by value, otherwise it was copied by reference and cannot be freed.
     // This information is important as we only free the data upon destruction
     // if this is the case
-    bool containsFreeableData;
-    
+
     
     // Public ================================================================
     public:
+
+    int *planar_data;//for one range array
     /*  Constructor. */
     IntegralImage(void);
     
@@ -84,6 +85,9 @@ class IntegralImage {
     /*  Getter for height. */
     int getHeight(void);
     
+    /*  Returns the data field of this instance. */
+    int *getData(void);
+
     /*  Destructor. */
     ~IntegralImage(void);
     
@@ -92,8 +96,7 @@ class IntegralImage {
     protected:
     /*  Sets the data field by reference, i.e. the array is not copied.
         d: data to set */
-    void setData(int **d);
+    void setData(int *d);
     
-    /*  Returns the data field of this instance. */
-    int **getData(void);
+
 };

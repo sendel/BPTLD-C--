@@ -78,19 +78,26 @@ vector<double *> *Detector::detect(IntegralImage *frame, double *tbb) {
     // Loop through a range of bounding-box scales
     for (float scale = minScale; scale <= maxScale; scale += scaleInc) {
         int minX = 0;
-        int currentWidth = (int)(scale * baseWidth);
+        int currentWidth = (int)(scale * (float)baseWidth);
+        if(currentWidth>=width)currentWidth=width-1;
         int maxX = width - currentWidth;
-        int iterationsX = 30;
-        int incX = (maxX - minX) / (iterationsX - 1);
-        
+        float iterationsX = 30.0;
+        int incX = (int)floor((float)(maxX - minX) / (iterationsX - 1.0f));
+        if(incX==0)incX=1;
+
+	          // Same for y
+            int minY = 0;
+            int currentHeight = (int)(scale * (float)baseHeight);
+            if(currentHeight>=height)currentHeight=height-1;
+            int maxY = height - currentHeight;
+            float iterationsY = 30.0;
+            int incY = (int)floor((float)(maxY - minY) / (iterationsY - 1.0f));
+            if(incY==0)incY=1;
+	
         // Loop through all bounding-box top-left x-positions
         for (int x = minX; x <= maxX; x += incX) {
-            // Same for y
-            int minY = 0;
-            int currentHeight = (int)(scale * baseHeight);
-            int maxY = height - currentHeight;
-            int iterationsY = 30;
-            int incY = (maxX - minX) / (iterationsY - 1);
+
+  
             
             // Loop through all bounding-box top-left x-positions
             for (int y = minY; y <= maxY; y += incY) {
