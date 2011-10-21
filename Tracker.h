@@ -4,10 +4,9 @@
     Foundation. This software is provided without warranty of ANY kind. */
 
 #pragma once
-#include "cv.h"
-#include "highgui.h"
-#include "IntegralImage.h"
-#include "Classifier.h"
+#include <opencv/cv.h>
+#include <opencv/highgui.h>
+#include "nvClassifier.h"
 #include <math.h>
 
 using namespace cv;
@@ -77,7 +76,7 @@ class Tracker {
     TermCriteria *termCriteria;
     
     // Pointer to the classifier for the entire program
-    Classifier *classifier;
+    std::nvClassifier *classifier;
     
     /*  Returns the median of an array of float values.
         Note: has side-effect of sorting array A.
@@ -94,7 +93,7 @@ class Tracker {
         frameSize: size of the video frame as a CvSize object
         firstFrame: the first video stream frame
         classifier: pointer to the classifier for the program */
-    Tracker(int frameWidth, int frameHeight, CvSize *frameSize, IplImage *firstFrame, Classifier *classifier);
+    Tracker(int frameWidth, int frameHeight, CvSize *frameSize, IplImage *firstFrame, std::nvClassifier *classifier);
     
     /*  Tracks the region of the input frame indicated by the given
         bounding-box.
@@ -103,7 +102,7 @@ class Tracker {
         nextFrame: next video stream frame
         bb: array containing the trajectory bounding-box
             [x, y, width, height] */
-    double *track(IplImage *nextFrameIpl, IntegralImage *nextFrame, double *bb);
+    double *track(IplImage *nextFrameIpl, double *bb);
     
     /*  Setter for prevFrame (also frees the current value of prevFrame). */
     void setPrevFrame(IplImage *frame);

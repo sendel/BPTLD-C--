@@ -6,10 +6,10 @@
 #include "Tracker.h"
 
 
-Tracker::Tracker(int frameWidth, int frameHeight, CvSize *frameSize, IplImage *firstFrame, Classifier *classifier) {
+Tracker::Tracker(int frameWidth, int frameHeight, CvSize *frameSize, IplImage *firstFrame, std::nvClassifier *classifier) {
     width = frameWidth;
     height = frameHeight;
-    prevFrame = cvCloneImage(firstFrame);
+    prevFrame = firstFrame;
     prevPyramid = cvCreateImage(*frameSize, IPL_DEPTH_8U, 1);
     nextPyramid = cvCreateImage(*frameSize, IPL_DEPTH_8U, 1);
     prevPoints = (CvPoint2D32f *)cvAlloc(TOTAL_POINTS * sizeof(CvPoint2D32f));
@@ -38,7 +38,7 @@ float Tracker::median(float *A, int length) {
 }
 
 
-double *Tracker::track(IplImage *nextFrame, IntegralImage *nextFrameIntImg, double *bb) {
+double *Tracker::track(IplImage *nextFrame, double *bb) {
     // Perform Lucas-Kanade Tracking -----------------------------------------
     // Distribute points to track uniformly over the bounding-box
     double bbWidth = bb[2];
@@ -103,6 +103,8 @@ double *Tracker::track(IplImage *nextFrame, IntegralImage *nextFrameIntImg, doub
     // Allocate the ratios array for storing each ratio and reset comparisons
     // to zero so we can count the number of successful comparisons
     float *scales = (float *)malloc(comparisons * sizeof(float));
+    //float *scalesX = (float *)malloc(comparisons * sizeof(float));
+    //float *scalesY = (float *)malloc(comparisons * sizeof(float));
     comparisons = 0;
     
     for (i = 0; i < TOTAL_POINTS; i++) {
@@ -116,7 +118,10 @@ double *Tracker::track(IplImage *nextFrame, IntegralImage *nextFrameIntImg, doub
                 float sNext = sqrt(dxNext * dxNext + dyNext * dyNext);
                 
                 if (sPrev != 0 && sNext != 0) {
+                //if (dxPrev != 0 && dyPrev != 0 && dxNext != 0 && dyNext != 0) {
                     scales[comparisons] = sNext / sPrev;
+                    //scalesX[comparisons] = dxNext / dxPrev;
+                    //scalesY[comparisons] = dyNext / dyPrev;
                     comparisons++;
                 }
             }
@@ -125,59 +130,50 @@ double *Tracker::track(IplImage *nextFrame, IntegralImage *nextFrameIntImg, doub
     
     // Get the median scale factor
     double scale = (double)median(scales, comparisons);
+    //double scaleX = (double)median(scalesX, comparisons);
+    //double scaleY = (double)median(scalesY, comparisons);
     
     // Calculate the offset of the bounidng-box in x and y directions
     // We half the result because the bounding-box is made to expand about its
     // centre
     double offsetX = 0.5f * bbWidth * (scale - 1);
     double offsetY = 0.5f * bbHeight * (scale - 1);
+    //double offsetX = 0.5f * bbWidth * (scaleX - 1);
+    //double offsetY = 0.5f * bbHeight * (scaleY - 1);
     
     // Free memory
     cvReleaseImage(&prevFrame);
-    prevFrame = cvCloneImage(nextFrame);
+    prevFrame = nextFrame;
     free(dxs);
     free(dys);
     free(scales);
+    //free(scalesX);
+    //free(scalesY);
     
     
     // Set output ------------------------------------------------------------
     // We output the estimated new top-left and bottom-right coordinates of
     // the bounding-box. [top-left x, top-left y, width, height]
-    double *bbNew = new double[5];
+    double *bbNew = new double[6];
     bbNew[0] = bb[0] - offsetX + dispX;
     bbNew[1] = bb[1] - offsetY + dispY;
     bbNew[2] = bb[2] + offsetX * 2;
     bbNew[3] = bb[3] + offsetY * 2;
-   
-	//避免边框盒左上角坐标出现负值或者右下角坐标大于帧宽高
-	if((bbNew[0] < 0)||(bbNew[1] < 0)||((bbNew[0]+bbNew[2]) > nextFrame->width)||((bbNew[1]+bbNew[3]) > nextFrame->height))
-	{
-		bbNew[0] = 0;
-		bbNew[1] = 0;
-		bbNew[2] = 0;
-		bbNew[3] = 0;
-		bbNew[4] = 0;
-	}
-	else
-	{
-		//只有在跟踪器输出坐标有效的情况下,才有必要计算信任度
-		bbNew[4] = (double)classifier->classify(nextFrameIntImg, (int)bbNew[0], (int)bbNew[1], (int)bbNew[2], (int)bbNew[3]);
-	}
+    bbNew[5] = 0;
+    int *bb_tmp=new int[5];
+    for(int i=0;i<4;i++)
+    	bb_tmp[i]=(int)bbNew[i];
+    bb_tmp[4]=0;
+    bbNew[4] = (double)classifier->classify(bb_tmp);
+    delete [] bb_tmp;
     
-	
-	//cout<<"跟踪器输出的边框盒的信任度:"<<bbNew[4]<<endl;
-	//cout<<"bbNew[0] = "<<bbNew[0]<<endl;
-	//cout<<"bbNew[1] = "<<bbNew[1]<<endl;
-	//cout<<"bbNew[2] = "<<bbNew[2]<<endl;
-	//cout<<"bbNew[3] = "<<bbNew[3]<<endl;
-    
-	return bbNew;
+    return bbNew;
 }
 
 
 void Tracker::setPrevFrame(IplImage *frame) {
     cvReleaseImage(&prevFrame);
-    prevFrame = cvCloneImage(frame);
+    prevFrame = frame;
 }
 
 

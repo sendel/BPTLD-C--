@@ -3,50 +3,48 @@
     terms of the GNU General Public License as published by the Free Software
     Foundation. This software is provided without warranty of ANY kind. */
 
-#include "cv.h"
-#include "highgui.h"
-#include "Detector.h"
-#include "Classifier.h"
-#include "Tracker.h"
+/*
+ * CUDA Implemented by VarnaSoftware (C) 2011
+ * SYavorovsky@varnasoftware.com
+ * 
+ */
+
+#include <opencv/cv.h>
+#include <opencv/highgui.h>
 #include <time.h>
 #include <stdlib.h>
 #include <math.h>
 #include <vector>
 #include <iostream>
+#include "Tracker.h"
+#include "nvClassifier.h"
 using namespace std;
 
 
-///全局变量 ==================================================================
-// 常量      -----------------------------------------------------------------
-// 分类器中蕨的数量
-#define TOTAL_FERNS 13
-
-// 每颗蕨的节点数
-#define TOTAL_NODES 7
-
-// 特征小块与整幅图像的最小的高度宽度百分比
+// Minimum percentage of patch width and height a feature can take
 #define MIN_FEATURE_SCALE 0.1f
 
-// 特征小块与整幅图像的最大的高度宽度百分比
+// Maximum percentage of patch width and height a feature can take
 #define MAX_FEATURE_SCALE 0.5f
 
-// 上一帧轨迹上的小块的最小的信任度，用于本帧中学习
-#define MIN_LEARNING_CONF 0.8
+// Minimum confidence of the previous frame trajectory patch for us to learn
+// this frame
+#define MIN_LEARNING_CONF 0.8f
 
-// 当探测出的小块中有一个信任度高于跟踪器跟踪的小块,
-// 它必须也高于这个值，然后才能用于重新初始化跟踪器
-// 注意: MIN_REINIT_CONF 应当 <= MIN_LEARNING_CONF
-#define MIN_REINIT_CONF 0.7
+// When a detected patch has higher confidence than the tracked patch, it must
+// still have higher confidence than this for us to reinitialise
+// Note: Should be <= MIN_LEARNING_CONF
+#define MIN_REINIT_CONF 0.7f
 
-// 上一帧跟踪器跟踪出的小块的最小的信任度,用于下一帧中继续跟踪
-#define MIN_TRACKING_CONF 0.15
+// Minimum confidence of the tracked patch in the previous frame for us to
+// track in the next frame
+#define MIN_TRACKING_CONF 0.1f
 
 
 // 变量 -----------------------------------------------------------------
 // 我们的分类器，跟踪器和探测器
-static Classifier *classifier;
-static Tracker *tracker;
-static Detector *detector;
+static nvClassifier *tld_classifier;
+static Tracker *tld_tracker;
 
 // 让我们知道TLD是否被初始化过
 static bool initialised = false;
@@ -193,8 +191,6 @@ void BpTld_Init(int Width,int Height,IplImage * firstImage,double * firstbb)
 	frameHeight = Height;
 	frameSize = (CvSize *)malloc(sizeof(CvSize));
 	*frameSize = cvSize(frameWidth, frameHeight);
-	IntegralImage *firstFrame = new IntegralImage();
-	firstFrame->createFromIplImage(firstImage);
 	IplImage *firstFrameIplImage = firstImage;
 	double *bb = firstbb;
 	initBBWidth = (float)bb[2];
@@ -204,17 +200,25 @@ void BpTld_Init(int Width,int Height,IplImage * firstImage,double * firstbb)
 
 	// 初始化分类器,跟踪器和探测器
 	srand((unsigned int)time(0));
-	classifier = new Classifier(TOTAL_FERNS, TOTAL_NODES, MIN_FEATURE_SCALE, MAX_FEATURE_SCALE);
-	tracker = new Tracker(frameWidth, frameHeight, frameSize, firstFrameIplImage, classifier);
-	detector = new Detector(frameWidth, frameHeight, bb, classifier);
-
+        tld_classifier = new std::nvClassifier(MIN_FEATURE_SCALE, MAX_FEATURE_SCALE);
+        tld_tracker = new Tracker(frameWidth, frameHeight, frameSize, firstFrameIplImage, tld_classifier);
+	
+	
 	// 用初始图像小块和它的仿射变形来训练分类器
-	classifier->train(firstFrame, (int)bb[0], (int)bb[1], (int)initBBWidth, (int)initBBHeight, 1);
-	bbWarpPatch(firstFrame, bb);
-	trainNegative(firstFrame, bb);
+    tld_classifier->set_II((unsigned char *)firstFrameIplImage->imageData,firstFrameIplImage->width,firstFrameIplImage->height);
+    // Train the classifier on the bounding-box patch and warps of it
+    int *bb_tmp=new int[5];
+    for(int i=0;i<4;i++)
+    	bb_tmp[i]=(int)tld_bb[i];
+    bb_tmp[4]=1;
+    tld_classifier->train(bb_tmp);
+    tld_classifier->bbWarpPatch(tld_bb);
+    tld_classifier->trainNegative(tld_bb);
+
+    delete [] bb_tmp;
 
 	// 释放内存
-	delete firstFrame;
+	//delete firstFrame;
 	// 设置bool值initialised
 	initialised = true;
 
@@ -233,45 +237,44 @@ void BpTld_Process(IplImage * NewImage,double * ttbb,double * outPut) {
     // 获得输入 -------------------------------------------------------------
     // 当前帧
     IplImage *nextFrame = NewImage;
-    IntegralImage *nextFrameIntImg = new IntegralImage();
-    nextFrameIntImg->createFromIplImage(NewImage);
-    
+    tld_classifier->set_II((unsigned char *)nextFrame->imageData,nextFrame->width,nextFrame->height);
 	// 轨迹边框盒[x, y, width, height]
-    double *bb = ttbb;
+    double *tld_bb = ttbb;
     
     
     // 跟踪 + 探测 ------------------------------------------------------
 	// 只有在上个迭代中我们足够自信的时候,才跟踪
 	// 从这开始，跟踪器处理下一帧内存
-    double *tbb;
-    vector<double *> *dbbs;
+	    double *tbb;
+	    vector<double *> *dbbs;
+
+	    if (confidence > MIN_TRACKING_CONF) {
+	        tbb = tld_tracker->track(nextFrame, tld_bb);
+		if (tbb[4] < MIN_TRACKING_CONF){
+		        tbb[0] = 0;
+		        tbb[1] = 0;
+		        tbb[2] = initBBWidth;
+		        tbb[3] = initBBHeight;
+		        tbb[4] = MIN_TRACKING_CONF;
+		        tbb[5] = -1;
+	        }
+        	//dbbs=new vector<double *>();
+        	dbbs = tld_classifier->detect(tbb);
+	    } else {
+	    	printf("PIZDOS\n");
+	        tbb = new double[6];
+	        tbb[0] = 0;
+	        tbb[1] = 0;
+	        tbb[2] = initBBWidth;
+	        tbb[3] = initBBHeight;
+	        tbb[4] = MIN_TRACKING_CONF;
+	        tbb[5] = -1;
+	        dbbs = tld_classifier->detect(tbb);
+	        tld_tracker->setPrevFrame(nextFrame);
+
+	    }
     
-    if (confidence > MIN_TRACKING_CONF) {
-		//cout<<"跟踪前."<<endl;
-        tbb = tracker->track(nextFrame, nextFrameIntImg, bb);
-		//cout<<"跟踪后,探测前."<<endl;
-		if (tbb[4] > MIN_TRACKING_CONF)
-		{
-			dbbs = detector->detect(nextFrameIntImg, tbb);
-		} 
-		else
-		{
-			dbbs = detector->detect(nextFrameIntImg, NULL);
-		}
-        
-		//cout<<"探测后."<<endl;
-    } else {
-        dbbs = detector->detect(nextFrameIntImg, NULL);
-        tracker->setPrevFrame(nextFrame);
-        tbb = new double[5];
-        tbb[0] = 0;
-        tbb[1] = 0;
-        tbb[2] = 0;
-        tbb[3] = 0;
-        tbb[4] = MIN_TRACKING_CONF;
-    }
-    
-    
+   
     // 学习 -----------------------------------------------------------------
     // 获得最好的探测出的小块的信任度
     double dbbMaxConf = 0.0f;
@@ -300,21 +303,27 @@ void BpTld_Process(IplImage * NewImage,double * ttbb,double * outPut) {
     }
     
 	// 如果跟踪出的小块的信任度最高并且最后一帧时足够自信，那么就启动约束。
-    else if (tbb[4] > dbbMaxConf && confidence > MIN_LEARNING_CONF) {
-        for (int i = 0; i < dbbs->size(); i++) {
-			// 用正向和负向小块训练分类器
-			// 正向-与被跟踪的小块重合
-			// 负向-被分类为正向但与被跟踪的小块不重合
-            double *dbb = dbbs->at(i);
-            
-            if (dbb[5] == 1) {
-                classifier->train(nextFrameIntImg, (int)dbb[0], (int)dbb[1], (int)dbb[2], (int)dbb[3], 1);
-            }
-            else if (dbb[5] == 0) {
-                classifier->train(nextFrameIntImg, (int)dbb[0], (int)dbb[1], (int)dbb[2], (int)dbb[3], 0);
-            }
-        }
-    }
+	    else if (tbb[4] > dbbMaxConf && confidence > MIN_LEARNING_CONF) {
+	        for (int i = 0; i < dbbs->size(); i++) {
+	            // Train the classifier on positive (overlapping with tracked
+	            // patch) and negative (classed as positive but non-overlapping)
+	            // patches
+	            double *dbb = dbbs->at(i);
+                int bb_tmp[5];
+                for(int i=0;i<4;i++)
+                	bb_tmp[i]=(int)dbb[i];
+                bb_tmp[4]=0;
+	            if (dbb[5] == 1) {
+
+	                bb_tmp[4]=1;
+	            	tld_classifier->train(bb_tmp);
+	            }
+	            else if (dbb[5] == 0) {
+	            	tld_classifier->train(bb_tmp);
+	            }
+
+	        }
+	    }
     
 	// 为下个迭代设置信任度
     confidence = tbb[4];
@@ -326,7 +335,12 @@ void BpTld_Process(IplImage * NewImage,double * ttbb,double * outPut) {
 	outPut[3] = tbb[3];
 
     
-    
+   	    for (int i = 1; i < bbCount; i++) {
+	        double *bb_s = dbbs->at(i - 1);
+	        delete bb_s;
+	    }
+	    
+	    
 	//////////////////////////////////////////////////////////////////////////
 	//此处tbb[0],tbb[1],tbb[2],tbb[3]即是最终的边框盒
 	//如果tbb[2],tbb[3]全都大于0,,就表明估算出物体位置
@@ -337,9 +351,9 @@ void BpTld_Process(IplImage * NewImage,double * ttbb,double * outPut) {
     // Columns correspond to [x, y, width, height, confidence, overlapping]
     
     // 释放内存
-    free(tbb);
+    delete [] tbb;
     dbbs->clear();
-    delete nextFrameIntImg;
+   // delete nextFrameIntImg;
 }
 
 
