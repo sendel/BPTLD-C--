@@ -2,12 +2,12 @@
  * nvClassifier.cpp
  *
  *  Created on: 17.10.2011
- *      Author: sadmin
+ *      Author:  www.VarnaSoftware.com,  SYavorovsky@varnasoftware.com
  */
 
 #include "nvClassifier.h"
 #include "kernels.cuh"
-
+#include "mt19937ar.h"
 
 namespace std {
 
@@ -20,13 +20,14 @@ nvClassifier::nvClassifier(float minScale, float maxScale) {
 	 {
 		for (int i = 0; i < TOTAL_NODES; i++)
 		{
-			forest_ferns[f].nodes[i][2]=(maxScale - minScale) * ((float)rand() / (float)RAND_MAX) + minScale;
-					//(maxScale - minScale) * (float)genrand_int31()/(float)RAND_MAX + minScale;
-			forest_ferns[f].nodes[i][3]=(maxScale - minScale) * ((float)rand() / (float)RAND_MAX) + minScale;
-			forest_ferns[f].nodes[i][0]= (1.0f - forest_ferns[f].nodes[i][2]) * ((float)rand() / (float)RAND_MAX);
-					//(1.0f - forest_ferns[f].nodes[i][2]) * (float)genrand_int31()/(float)RAND_MAX;
-			forest_ferns[f].nodes[i][1]=(1.0f - forest_ferns[f].nodes[i][3]) * ((float)rand() / (float)RAND_MAX);
-					//(1.0f - forest_ferns[f].nodes[i][3]) * (float)genrand_int31()/(float)RAND_MAX;
+			forest_ferns[f].nodes[i][2]=//(maxScale - minScale) * ((float)rand() / (float)RAND_MAX) + minScale;
+					(maxScale - minScale) * (float)genrand_int31()/(float)RAND_MAX + minScale;
+			forest_ferns[f].nodes[i][3]= //(maxScale - minScale) * ((float)rand() / (float)RAND_MAX) + minScale;
+					 (maxScale - minScale) * (float)genrand_int31()/(float)RAND_MAX + minScale;
+			forest_ferns[f].nodes[i][0]= //(1.0f - forest_ferns[f].nodes[i][2]) * ((float)rand() / (float)RAND_MAX);
+					(1.0f - forest_ferns[f].nodes[i][2]) * (float)genrand_int31()/(float)RAND_MAX;
+			forest_ferns[f].nodes[i][1]= //(1.0f - forest_ferns[f].nodes[i][3]) * ((float)rand() / (float)RAND_MAX);
+					(1.0f - forest_ferns[f].nodes[i][3]) * (float)genrand_int31()/(float)RAND_MAX;
 		}
 
 	 }
@@ -133,8 +134,11 @@ void nvClassifier::train(int* patch)
 	dim3 dimBlock (blocksize);
 	dim3 dimGrid( ceil( (float)num_threads / (float)blocksize) );
 
+    int *d_tbb;
+    cudaMalloc((void**) &d_tbb, sizeof(int)*6);
+
 	// Execute the kernel on the GPU
-	train_kernel<<< dimGrid, dimBlock >>>(c_forest_ferns,c_IIdata,width,height,1,d_patch,NULL);
+	train_kernel<<< dimGrid, dimBlock >>>(c_forest_ferns,c_IIdata,width,height,1,d_patch,d_tbb);
 	cudaDeviceSynchronize();
 	// Copy result from GPU to CPU
 
@@ -146,11 +150,12 @@ void nvClassifier::train(int* patch)
 	// Free up GPU memory
 
 	cudaFree(d_patch);
+	cudaFree(d_tbb);
 
 
 }
 
-vector<double *> *nvClassifier::detect(double *tbb)
+void nvClassifier::detect(double *tbb, double confidence)
 {
     // Set the width and height that are used as 1 * scale.
     // If tbb is NULL, we are not tracking and use the first-frame
@@ -171,12 +176,12 @@ vector<double *> *nvClassifier::detect(double *tbb)
 
 
     if (baseWidth < 40 || baseHeight < 40) {
-        return new vector<double *>();
+        return;
     }
 
     // Using the sliding-window approach, find positive matches to our object
     // Vector of positive patch matches' bounding-boxes
-    vector<double *> *bbs = new vector<double *>();
+
 
     // Minimum and maximum scales for the bounding-box, the number of scale
     // iterations to make, and the amount to increment scale by each iteration
@@ -222,8 +227,8 @@ vector<double *> *nvClassifier::detect(double *tbb)
        // printf("h:%d; ",currentHeight);
     }
     cudaDeviceSynchronize();
-	float* h_answer;
-	h_answer=(float*)malloc(sizeof(float)*p_len);
+	//float* h_answer;
+	//h_answer=(float*)malloc(sizeof(float)*p_len);
 
 	// Allocate GPU (device) memory and variables
 	float* d_answer;
@@ -246,57 +251,137 @@ vector<double *> *nvClassifier::detect(double *tbb)
 	classify_kernel<<< dimGrid3, dimBlock3 >>>(c_forest_ferns,c_IIdata,width,height,p_len,d_patch,d_answer);
 	//}
 	cudaDeviceSynchronize();
+
+	dim3 dimBlock5 (128);
+	dim3 dimGrid5 ( ceil( (float)p_len / (float)dimBlock5.x) );
+	int tbb_tmp[6];
+	for(int p=0;p<6;p++)
+		tbb_tmp[p]=(int)tbb[p];
+    int *d_tbb;
+    cudaMalloc((void**) &d_tbb, sizeof(int)*6);
+    cudaMemcpy(d_tbb,tbb_tmp,sizeof(int)*6,cudaMemcpyHostToDevice);
+
+	detect_conf_kernel<<< dimGrid5, dimBlock5 >>>(d_patch, d_tbb, p_len, d_answer);
+	cudaDeviceSynchronize();
 	// Copy result from GPU to CPU
-	cudaMemcpy(h_answer, d_answer, sizeof(float)*p_len, cudaMemcpyDeviceToHost);
+	//cudaMemcpy(h_answer, d_answer, sizeof(float)*p_len, cudaMemcpyDeviceToHost);
 
 
-	int *patch=(int*)malloc(sizeof(int)*p_len*5);
-	cudaMemcpy(patch, d_patch, sizeof(int)*5*p_len, cudaMemcpyDeviceToHost);
+	//int *patch=(int*)malloc(sizeof(int)*p_len*5);
+	//cudaMemcpy(patch, d_patch, sizeof(int)*5*p_len, cudaMemcpyDeviceToHost);
 
+	/*
+	 * Get MAX confidence from answerd area and it index.
+	 */
+
+    #define BLOCK_SIZE 128
+    // allocate device memory and data
+    float* d_idata[2] = {NULL,NULL};
+    unsigned int* d_idx[2] =  {NULL,NULL};
+
+    int n=p_len;//  ceil( (float)p_len / (float)BLOCK_SIZE);
+
+    cudaMalloc((void**) &d_idata[0], sizeof(float)*p_len) ;
+    cudaMalloc((void**) &d_idata[1], sizeof(float)*p_len) ;
+    cudaMemset(d_idata[1],0,sizeof(float)*p_len);
+
+   cudaMalloc((void**) &d_idx[0], sizeof(unsigned int)*p_len) ;
+   cudaMalloc((void**) &d_idx[1], sizeof(unsigned int)*p_len) ;
+
+    cudaMemset(d_idx[0],0,sizeof(unsigned int)*p_len);
+    cudaMemcpy(d_idata[0],d_answer,sizeof(float)*p_len,cudaMemcpyDeviceToDevice);
+    int k=2;
+
+    for ( i = 0; k >= 1; k--,i^=1 ){
+    	    dim3 dimBlock (BLOCK_SIZE, 1, 1);
+            dim3 dimGrid (ceil( (float)n / (float)dimBlock.x), 1, 1);
+            reduce3<<<dimGrid,dimBlock>>>(d_idata[i],d_idata[i^1],d_idx[i],d_idx[i^1]);
+            n=22;
+            //n=ceil( (float)n / (float)dimBlock.x);
+    }
+    cudaDeviceSynchronize();
+    float MaxConf;
+    int dbbMaxConf_idx;
+
+    cudaMemcpy(&MaxConf, d_idata[0], sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&dbbMaxConf_idx, d_idx[0], sizeof(int), cudaMemcpyDeviceToHost);
+
+    double dbbMaxConf=MaxConf/(float)TOTAL_FERNS;
+    //printf("MAX_VALUE_P is %d: %f\n", dbbMaxConf_idx, dbbMaxConf);
+#define MIN_REINIT_CONF 0.7f
+#define MIN_LEARNING_CONF 0.8f
+
+	if (dbbMaxConf > tbb[4] && dbbMaxConf > MIN_REINIT_CONF) {
+//		delete [] tbb;
+//		tbb = new double[5];
+		//double *dbb = dbbs->at(dbbMaxConfIndex);
+
+		int patchtest[5];
+		cudaMemcpy(&patchtest, d_patch+dbbMaxConf_idx*5, sizeof(int)*5, cudaMemcpyDeviceToHost);
+		//printf("PATCH is %d: %d\n", patchtest[0], patch[dbbMaxConf_idx*5]);
+        tbb[0] = (double)patchtest[0];
+	    tbb[1] = (double)patchtest[1];
+	    tbb[2] = (double)patchtest[2];
+	    tbb[3] = (double)patchtest[3];
+	    tbb[4] = dbbMaxConf;
+
+	}
+	else
+		if (tbb[4] > dbbMaxConf && confidence > MIN_LEARNING_CONF)
+		{
+			// Train the classifier on positive (overlapping with tracked
+			// patch) and negative (classed as positive but non-overlapping)
+			// patches
+        	num_threads = (unsigned int) TOTAL_FERNS;
+        	// Setup kernel execution parameters
+        	dim3 dimBlock8 (8,64);
+        	dim3 dimGrid8( ceil( (float)num_threads / (float)dimBlock8.x),ceil( (float)p_len / (float)dimBlock8.y) );
+        	//int tbb_tmp[5];
+        	/*for(int p=0;p<4;p++)
+        		tbb_tmp[p]=(int)tbb[p];
+            cudaMemcpy(d_tbb,tbb_tmp,sizeof(int)*4,cudaMemcpyHostToDevice);*/
+
+        	// Execute the kernel on the GPU
+        	train_kernel<<< dimGrid8, dimBlock8 >>>(c_forest_ferns,c_IIdata,width,height,p_len,d_patch,d_tbb);
+        	cudaDeviceSynchronize();
+
+		}
+
+
+/*
+    test=0;
+    test_idx=0;
 	for(int f=0;f<p_len;f++)
 	{
 
 	 float myanswer=h_answer[0+f];
-	 /*for(i=1;i<TOTAL_FERNS;i++)
-	 {
-		 myanswer+=h_answer[i+f*TOTAL_FERNS];
-	 }*/
-     double *bb = new double[6];
-     bb[0] = (double)patch[f*5];
-     bb[1] = (double)patch[f*5+1];
-     bb[2] = (double)patch[f*5+2];
-     bb[3] = (double)patch[f*5+3];
-     bb[4] = (double)myanswer/(float)TOTAL_FERNS;
-    // printf("About: %f,%f,%f,%f\n ",bb[0],bb[1],bb[2],bb[3]);
-     //if(bb[4]>0.6)
-     //printf("About: %f: %f\n ",myanswer, bb[4]);
-     if (tbb[5] != -1 && bbOverlap(bb, tbb) > MIN_LEARNING_OVERLAP) {
-         bb[5] = 1;
-     } else {
-         bb[5] = 0;
-     }
+	 if(test<myanswer){ test=myanswer; test_idx=f;}
 
-     // If positive, or negative and overlapping with the tracked
-     // bounding-box, add this bounding-box to our return list
-     if (bb[4] > 0.5f || bb[5] == 1) {
-         bbs->push_back(bb);
-     } else {
-         delete [] bb;
-     }
 	}
+	printf("MAX_VALUE is %d: %f\n", test_idx, test);
+*/
 
-	//////////////////////////////////////////
+
+
+    //////////////////////////////////////////
 	// All done - clean up and exit
 	//////////////////////////////////////////
 	// Free up CPU memory
-	free(h_answer);
-	free(patch);
+	//free(h_answer);
+	//free(patch);
+
 
 	// Free up GPU memory
+	cudaFree(d_tbb);
 	cudaFree(d_answer);
 	cudaFree(d_patch);
+	cudaFree(d_idata[0]);
+	cudaFree(d_idata[1]);
+	cudaFree(d_idx[0]);
+	cudaFree(d_idx[1]);
 
-    return bbs;
+
+
 }
 
 /*  Trains the classifier on negative training patches, i.e. patches from the
@@ -352,14 +437,15 @@ void nvClassifier::trainNegative(double *tbb)
 
 
 
-    int *bb_patch = new int[5];
+    int *bb_patch = new int[6];
     for(int i=0;i<4;i++)
     	bb_patch[i]=tbb[i];
     bb_patch[4]=0;
+    bb_patch[5]=0;
 
     int *d_tbb;
-    cudaMalloc((void**) &d_tbb, sizeof(int)*4);
-    cudaMemcpy(d_tbb,bb_patch,sizeof(int)*4,cudaMemcpyHostToDevice);
+    cudaMalloc((void**) &d_tbb, sizeof(int)*6);
+    cudaMemcpy(d_tbb,bb_patch,sizeof(int)*6,cudaMemcpyHostToDevice);
 
 
 	dim3 dimBlock3 (8,64);

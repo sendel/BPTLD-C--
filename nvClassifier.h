@@ -2,7 +2,7 @@
  * nvClassifier.h
  *
  *  Created on: 17.10.2011
- *      Author: sadmin
+ *      Author: www.VarnaSoftware.com,  SYavorovsky@varnasoftware.com
  */
 
 #ifndef NVCLASSIFIER_H_
@@ -51,7 +51,7 @@ public:
 
 	float classify(int* patch);
 	void train(int* patch);
-	vector<double *> *detect(double *tbb);
+	void detect(double *tbb, double confidence);
 	void set_II(const unsigned char *iImage, int Width, int Height); //get IPL and set II to cuda
 	void bbWarpPatch(double *bb); //train for init positive
 	void trainNegative(double *tbb); //train for init negative

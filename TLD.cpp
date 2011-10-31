@@ -163,7 +163,7 @@ void BpTld_Process(IplImage * NewImage,double * ttbb,double * outPut) {
 		        tbb[5] = -1;
 	        }
         	//dbbs=new vector<double *>();
-        	dbbs = tld_classifier->detect(tbb);
+        	dbbs = tld_classifier->detect(tbb,confidence);
 	    } else {
 	    	printf("PIZDOS\n");
 	        tbb = new double[6];
@@ -173,62 +173,13 @@ void BpTld_Process(IplImage * NewImage,double * ttbb,double * outPut) {
 	        tbb[3] = initBBHeight;
 	        tbb[4] = MIN_TRACKING_CONF;
 	        tbb[5] = -1;
-	        dbbs = tld_classifier->detect(tbb);
+	        tld_classifier->detect(tbb,confidence);
 	        tld_tracker->setPrevFrame(nextFrame);
 
 	    }
     
    
-    // 学习 -----------------------------------------------------------------
-    // 获得最好的探测出的小块的信任度
-    double dbbMaxConf = 0.0f;
-    int dbbMaxConfIndex = -1;
-    
-    for (int i = 0; i < dbbs->size(); i++) {
-        double dbbConf = dbbs->at(i)[4];
-        
-        if (dbbConf > dbbMaxConf) {
-            dbbMaxConf = dbbConf;
-            dbbMaxConfIndex = i;
-        }
-    }
-    
-	// 如果探测出的小块中有一个信任度最高，并且大于MIN_REINIT_CONF
-	// 那么就重置跟踪器的边框盒
-    if (dbbMaxConf > tbb[4] && dbbMaxConf > MIN_REINIT_CONF) {
-        delete tbb;
-        tbb = new double[5];
-        double *dbb = dbbs->at(dbbMaxConfIndex);
-        tbb[0] = dbb[0];
-        tbb[1] = dbb[1];
-        tbb[2] = dbb[2];
-        tbb[3] = dbb[3];
-        tbb[4] = dbb[4];
-    }
-    
-	// 如果跟踪出的小块的信任度最高并且最后一帧时足够自信，那么就启动约束。
-	    else if (tbb[4] > dbbMaxConf && confidence > MIN_LEARNING_CONF) {
-	        for (int i = 0; i < dbbs->size(); i++) {
-	            // Train the classifier on positive (overlapping with tracked
-	            // patch) and negative (classed as positive but non-overlapping)
-	            // patches
-	            double *dbb = dbbs->at(i);
-                int bb_tmp[5];
-                for(int i=0;i<4;i++)
-                	bb_tmp[i]=(int)dbb[i];
-                bb_tmp[4]=0;
-	            if (dbb[5] == 1) {
-
-	                bb_tmp[4]=1;
-	            	tld_classifier->train(bb_tmp);
-	            }
-	            else if (dbb[5] == 0) {
-	            	tld_classifier->train(bb_tmp);
-	            }
-
-	        }
-	    }
-    
+     
 	// 为下个迭代设置信任度
     confidence = tbb[4];
 
@@ -239,11 +190,6 @@ void BpTld_Process(IplImage * NewImage,double * ttbb,double * outPut) {
 	outPut[3] = tbb[3];
 
     
-   	    for (int i = 1; i < bbCount; i++) {
-	        double *bb_s = dbbs->at(i - 1);
-	        delete bb_s;
-	    }
-	    
 	    
 	//////////////////////////////////////////////////////////////////////////
 	//此处tbb[0],tbb[1],tbb[2],tbb[3]即是最终的边框盒
@@ -256,7 +202,6 @@ void BpTld_Process(IplImage * NewImage,double * ttbb,double * outPut) {
     
     // 释放内存
     delete [] tbb;
-    dbbs->clear();
    // delete nextFrameIntImg;
 }
 

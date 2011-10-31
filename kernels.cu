@@ -2,7 +2,7 @@
  * kernels.cu
  *
  *  Created on: 17.10.2011
- *      Author: SYavorovsky@varnasoftware.com
+ *      Author: www.VarnaSoftware.com,  SYavorovsky@varnasoftware.com
  */
 
 #include "kernels.cuh"
@@ -182,20 +182,32 @@ __global__ void train_kernel(struct one_fern *in_ferns,int *IIdata, int width, i
 
 	int is_positive=patch[p_idx*5+4];
 
-	if(tbb!=NULL)
+	if(is_positive<0) return;
+
+	if(p_idx2>1)
 	{
-		if (bbOverlap(tbb, &patch[p_idx*5]) >= MIN_LEARNING_OVERLAP)
-			is_positive=1;
+		if (is_positive==1 && bbOverlap(tbb, &patch[p_idx*5]) < MIN_LEARNING_OVERLAP)
+		{
+			is_positive=0;
+			//printf(" %d; %d \n",blockIdx.x,blockIdx.y);
+		}
+		//double fff
+		//printf(" %f; ",bbOverlap(tbb, &patch[p_idx*5]));
+		//printf(" %d; %d \n",blockIdx.x,blockIdx.y);
+
 	}
 
-	//if(p_idx2>1)printf(" %d; ",is_positive);
+	//if(tbb!=NULL && is_positive)printf(" %d; ",is_positive);
 
     if (is_positive == 0) {
     	atomicAdd(&in_ferns[idx].n[leaf],1);
     }
-    else {
-    	atomicAdd(&in_ferns[idx].p[leaf],1);
-    }
+
+	if (is_positive == 1)
+	{
+		atomicAdd(&in_ferns[idx].p[leaf],1);
+		//atomicExch(&in_ferns[idx].n[leaf],0);
+	}
    // int p=in_ferns[idx].p[leaf];
    // int n=in_ferns[idx].n[leaf];
     // Compute the posterior likelihood of a positive class for this leaf
@@ -222,7 +234,81 @@ __global__ void patcher_kernel(int count, int incX, int minX, int incY, int minY
 	patch[(p_len)*5+1]=y;
 	patch[(p_len)*5+2]=currentWidth;
 	patch[(p_len)*5+3]=currentHeight;
+	__syncthreads();
 }
+
+
+__global__ void detect_conf_kernel(int* patch, int* tbb, int p_len, float *ret)
+{
+	int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if(idx>=p_len)return;
+    double myanswer=ret[idx]/(float)TOTAL_FERNS;
+    int train_b=0;
+   // printf("About: %f,%f,%f,%f\n ",bb[0],bb[1],bb[2],bb[3]);
+
+    if (tbb[5] != -1 && bbOverlap(&patch[idx*5], tbb) > MIN_LEARNING_OVERLAP) {
+    	train_b=1;
+    } else {
+    	train_b=0;
+    }
+
+    // If positive, or negative and overlapping with the tracked
+    // bounding-box, add this bounding-box to our return list
+    if (myanswer > 0.5f || train_b==1) {
+    	train_b=1;
+    } else {
+    	train_b=-1; //we not wont to use it for train
+
+    }
+
+//   if(train_b==1)
+//     printf("About: %f: %d\n ",myanswer, blockIdx.x);
+
+    atomicExch(&patch[idx*5+4],train_b);
+}
+
+#define BLOCK_SIZE 128
+
+__shared__ float sdata[BLOCK_SIZE];
+__shared__ float sidxdata[BLOCK_SIZE];
+__global__ void reduce3(float*g_idata, float*g_odata,unsigned int *g_iidx,unsigned int *g_oidx)
+{
+//	__shared__ float sdata[BLOCK_SIZE];
+//	__shared__ float sidxdata[BLOCK_SIZE];
+// each thread loadsone element from global to shared mem
+unsigned int tid = threadIdx.x;
+unsigned int i= blockIdx.x*blockDim.x+ threadIdx.x;
+sdata[tid]=-1;
+if(i>=5400)return;
+if(tid>=BLOCK_SIZE)return;
+if(g_iidx[i]==0)g_iidx[i]=i;
+sdata[tid] = g_idata[i];
+sidxdata[tid] = g_iidx[i];
+__syncthreads();
+//printf("%d %f %f\n",blockIdx.x,sdata[tid],g_idata[i]);
+
+// do reduction in shared mem
+for(unsigned int s=blockDim.x/2; s>0; s>>=1) {
+if (tid < s) {
+	if(sdata[tid] < sdata[tid + s])
+		{
+		sdata[tid] = sdata[tid + s];
+		sidxdata[tid] = sidxdata[tid + s];
+		}
+
+}
+__syncthreads();
+}
+
+// write result for this block to global mem
+if(tid == 0) {
+	g_odata[blockIdx.x] = sdata[0];
+	g_oidx[blockIdx.x] = sidxdata[0];
+//if(sdata[0]>0)
+//	printf("%d %f\n",blockIdx.x,sdata[0]);
+}
+}
+
 
 __global__ void classify_kernel(struct one_fern *in_ferns,int *IIdata, int width, int height, int p_idx2, int* patch, float *ret )
 {
